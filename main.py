@@ -1,7 +1,6 @@
 
 from collections import deque
 
-
 class Node:
     def __init__(self, data):
         self.data = data
@@ -58,21 +57,19 @@ class Crop:
         self.yield_rate = yield_rate
 
 class Machine:
-    def __init__(self, name, fuel_capacity):
+    def __init__(self, name):
         self.name = name
-        self.fuel = fuel_capacity
         self.wear = 0 
 
-    def work(self, fuel_cost):
-        if self.fuel >= fuel_cost and self.wear < 100:
-            self.fuel -= fuel_cost
+    def work(self, warehouse, fuel_cost):
+        if warehouse.take("топливо", fuel_cost) and self.wear < 100:
             self.wear += 10
             return True
         return False
 
 class Warehouse:
     def __init__(self):
-        self.storage = {"топливо": 1000, "Пшеница": 0, "Кукуруза": 0}
+        self.storage = {"топливо": 1000, "Пшеница": 0, "Кукуруза": 0, "Ячмень": 0}
 
     def add(self, item, amount):
         self.storage[item] = self.storage.get(item, 0) + amount
@@ -92,7 +89,6 @@ class Field:
         self.days_growing = 0
         self.history = LinkedList()
 
-
 class AgroSimulation:
     def __init__(self):
         self.day = 1
@@ -100,14 +96,13 @@ class AgroSimulation:
         
         self.warehouse = Warehouse()
         self.fields = [Field("Поле_А", 50), Field("Поле_Б", 120), Field("Поле_В", 30)]
-        self.machines = [Machine("Трактор", 200)]
+        self.machines = [Machine("Трактор")]
         
         self.task_queue = deque()
-        
         self.catalog = sorted([("Кукуруза", 1000), ("Пшеница", 800), ("Ячмень", 650)])
 
     def show_status(self):
-        print(f"\n=== ДЕНЬ {self.day} | Бюджет: {self.budget}₽ ===")
+        print(f"\n=== ДЕНЬ {self.day} | Бюджет: {self.budget} Руб ===")
         print(f"Склад: {self.warehouse.storage}")
         print("Поля (отсортированы по площади):")
         
@@ -118,16 +113,38 @@ class AgroSimulation:
 
     def add_task(self):
         print("Доступные задачи: 1-Посев, 2-Сбор")
-        choice = input("Тип задачи: ")
-        f_id = input("ID поля: ")
+        choice = input("Тип задача: ").strip()
+        
+        if choice not in ["1", "2"]:
+            print("[!] Ошибка: Неверный тип задачи.")
+            return
+
+        f_id = input("ID поля: ").strip()
+        field = next((f for f in self.fields if f.field_id == f_id), None)
+        if not field:
+            print(f"[!] Ошибка: Поле с ID '{f_id}' не найдено.")
+            return
         
         if choice == "1":
-            crop_name = input("Название культуры для посева: ")
+            if field.status != "пусто":
+                print(f"[!] Ошибка: {f_id} уже занято!")
+                return
+                
+            crop_name = input("Название культуры для посева: ").strip().capitalize()
+            if not binary_search_catalog(self.catalog, crop_name):
+                print(f"[!] Ошибка: Культура '{crop_name}' отсутствует в каталоге цен.")
+                return
+                
             self.task_queue.append({"type": "plant", "field": f_id, "crop": crop_name})
-            print("Задача добавлена в очередь.")
+            print(f"[-] Задача добавлена в очередь: Посеять {crop_name} на {f_id}.")
+            
         elif choice == "2":
+            if field.status != "созрело":
+                print(f"[!] Ошибка: На {f_id} еще нет созревшего урожая для сбора.")
+                return
+                
             self.task_queue.append({"type": "harvest", "field": f_id})
-            print("Задача добавлена в очередь.")
+            print(f"[-] Задача добавлена в очередь: Собрать урожай с {f_id}.")
 
     def process_tasks(self):
         while self.task_queue:
@@ -138,21 +155,19 @@ class AgroSimulation:
             
             if task["type"] == "plant" and field.status == "пусто":
                 catalog_item = binary_search_catalog(self.catalog, task["crop"])
-                if catalog_item:
-                    cost = catalog_item[1]
-                    if self.budget >= cost and self.machines[0].work(20):
-                        self.budget -= cost
-                        field.crop = Crop(task["crop"], 3, 5) # Растет 3 дня
-                        field.status = "засеяно"
-                        field.history.append(f"День {self.day}: Посев {task['crop']}")
-                        print(f"[-] Успешно засеяно {task['field']}.")
-                    else:
-                        print(f"[!] Не хватает денег ({cost}₽) или топлива.")
+                cost = catalog_item[1]
+                
+                if self.budget >= cost and self.machines[0].work(self.warehouse, 20):
+                    self.budget -= cost
+                    field.crop = Crop(task["crop"], 3, 5)
+                    field.status = "засеяно"
+                    field.history.append(f"День {self.day}: Посев {task['crop']}")
+                    print(f"[-] Успешно засеяно {task['field']}.")
                 else:
-                    print(f"[!] Культура {task['crop']} не найдена в каталоге.")
+                    print(f"[!] Не удалось засеять {task['field']}: не хватает денег или топлива на складе.")
 
             elif task["type"] == "harvest" and field.status == "созрело":
-                if self.machines[0].work(30):
+                if self.machines[0].work(self.warehouse, 30):
                     yield_amount = field.area * field.crop.yield_rate
                     self.warehouse.add(field.crop.name, yield_amount)
                     field.history.append(f"День {self.day}: Сбор {yield_amount}т {field.crop.name}")
@@ -160,6 +175,8 @@ class AgroSimulation:
                     field.crop = None
                     field.days_growing = 0
                     print(f"[-] Урожай собран с {task['field']}.")
+                else:
+                    print(f"[!] Не удалось собрать урожай с {task['field']}: недостаточно топлива на складе.")
 
     def next_day(self):
         self.day += 1
@@ -176,18 +193,19 @@ class AgroSimulation:
         while True:
             self.show_status()
             print("\nМеню: 1 - Добавить задачу, 2 - След. день, 3 - История поля, 0 - Выход")
-            cmd = input("Команда: ")
+            cmd = input("Команда: ").strip()
             
             if cmd == "1": self.add_task()
             elif cmd == "2": self.next_day()
             elif cmd == "3":
-                f_id = input("ID поля: ")
+                f_id = input("ID поля: ").strip()
                 field = next((f for f in self.fields if f.field_id == f_id), None)
                 if field:
                     print(f"История {f_id}:", field.history.get_all())
+                else:
+                    print("[!] Поле не найдено.")
             elif cmd == "0": break
 
 if __name__ == "__main__":
     game = AgroSimulation()
     game.run()
-
